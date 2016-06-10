@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
-module Google.Trends(queryTrendsWithLogin) where
+module Google.Trends(queryTrendsWithLogin, queryTrendsNoLogin) where
 
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -21,12 +21,6 @@ urlTrends                :: String
 urlTrends                = "http://www.google.com/trends"
 urlTrendsComponent       :: String
 urlTrendsComponent       = "http://www.google.com/trends/fetchComponent"
-urlTrendsReport          :: String
-urlTrendsReport          = "http://www.google.com/trends/trendsReport"
-urlCookieCheck           :: String
-urlCookieCheck           = "https://www.google.com/accounts/CheckCookie"
-urlGoogle                :: String
-urlGoogle                = "http://www.google.com"
 
 defaultUserAgent = do
     bs <- getLatestBrowserString "Firefox"
@@ -36,7 +30,13 @@ toStrictString = BS.concat . LBS.toChunks
 
 {- Google Login -}
 loginHeaders options ua = options & 
-{-    (proxy ?~ httpProxy "localhost" 8080) &-}
+    (header "Accept" .~ ["text/plain"]) &
+    (header "User-Agent" .~ [ua]) &
+    (header "Content-Type" .~ ["application/x-www-form-urlencoded"]) &
+    (header "Referrer" .~ [urlServiceLoginBoxAuthBS])
+
+loginHeadersWithProxy options (host, port) ua = options &
+    (proxy ?~ httpProxy (BS.pack host) port) &
     (header "Accept" .~ ["text/plain"]) &
     (header "User-Agent" .~ [ua]) &
     (header "Content-Type" .~ ["application/x-www-form-urlencoded"]) &
@@ -56,11 +56,13 @@ makeLoginForm form ((key, value):inputs) email pass =
     makeLoginForm newForm inputs email pass
     where newForm = ((key := value):form)
 
-doLogin :: String -> String -> (Options -> Ss.Session -> IO a) -> (Options -> Ss.Session -> IO a) -> IO a
-doLogin email pass continue fail = do
+doLogin :: String -> String -> Maybe (String, Int) -> (Options -> Ss.Session -> IO a) -> (Options -> Ss.Session -> IO a) -> IO a
+doLogin email pass maybeProxy continue fail = do
     Ss.withSession $ \session -> do
         userAgent <- defaultUserAgent
-        let headers = loginHeaders defaults userAgent
+        let headers = case maybeProxy of
+                          Nothing    -> loginHeaders defaults userAgent
+                          Just proxy -> loginHeadersWithProxy defaults proxy userAgent
         inputs <- getLoginInputs headers session
         let form = makeLoginForm [] inputs email pass
         resp <- Ss.postWith headers session urlServiceLoginBoxAuth form
@@ -77,9 +79,11 @@ queryParams options keywords = options &
     (param "cid" .~ ["TIMESERIES_GRAPH_0"]) &
     (param "export" .~ ["5"])
 
-queryTrends keywords headers session = do
+queryTrends keywords headers maybeSession = do
     let options = queryParams headers (T.pack keywords)
-    resp <- Ss.getWith options session urlTrendsComponent
+    resp <- case maybeSession of
+                Nothing -> getWith options urlTrendsComponent
+                Just session -> Ss.getWith options session urlTrendsComponent
     let body = resp ^. responseBody
     let parsed = T.unpack (TE.decodeUtf8 (toStrictString body))
     return $ [processPoint point | point <- parseTrends parsed]
@@ -114,11 +118,19 @@ monthName "11" = "December"
 processPoint :: [String] -> (Integer, String, Integer)
 processPoint (year:month:count:[]) = (read year :: Integer, monthName month, read count :: Integer)
 
-queryTrendsWithLogin :: String -> String -> String -> IO (Maybe [(Integer, String, Integer)])
-queryTrendsWithLogin email pass keywords = do
-    doLogin email pass continue fail
+queryTrendsNoLogin :: Maybe (String, Int) -> String -> IO (Maybe [(Integer, String, Integer)])
+queryTrendsNoLogin maybeProxy keywords = do
+    let options = case maybeProxy of
+                      Nothing -> defaults 
+                      Just (host, port) -> defaults & (proxy ?~ httpProxy (BS.pack host) port)
+    results <- queryTrends keywords options Nothing
+    return $ Just results
+
+queryTrendsWithLogin :: String -> String -> Maybe (String, Int) -> String -> IO (Maybe [(Integer, String, Integer)])
+queryTrendsWithLogin email pass maybeProxy keywords = do
+    doLogin email pass maybeProxy continue fail
     where continue h s = do 
-              results <- queryTrends keywords h s
+              results <- queryTrends keywords h (Just s)
               return $ Just results
           fail _ _ = return Nothing
           
