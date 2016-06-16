@@ -3,6 +3,11 @@ GOOGLE TRENDS
 
 Very simple library for accessing Google Trends
 
+INSTALL
+-------
+
+`cabal install haskell-google-trends`
+
 HOW TO USE
 ----------
 
