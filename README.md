@@ -17,4 +17,5 @@ import Google.Trends
 
 main = do
     Just results <- queryTrendsWithLogin "your-login@gmail.com" "password" "pizza"
-    print [(month, value) | (year, month, value) <- results, year == 2010]```
+    print [(month, value) | (year, month, value) <- results, year == 2010]
+```
